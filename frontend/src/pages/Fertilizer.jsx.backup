@@ -1,0 +1,60 @@
+import React, { useState } from "react";
+import { Link } from "react-router-dom";
+import { api } from "../api";
+import { Card, Notice, PageHeader } from "../ui";
+
+const CROPS = ["Rice", "Wheat", "Maize", "Sugarcane", "Cotton", "Chickpea", "Soybean", "Groundnut", "Tomato", "Potato", "Apple", "Banana", "Mango"];
+const LEVELS = [["", "Not measured"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]];
+
+export function FertResult({ res }) {
+  return (
+    <>
+      <Notice>{res.method}</Notice>
+      <div className="nutrients">{res.nutrients.map(n => (
+        <div key={n.nutrient} className={`nutrient lvl-${n.level.replace(" ", "-")}`}><b>{n.nutrient}</b><span className="badge">{n.level}</span><p>{n.finding}</p>
+          {n.options.length > 0 && <ul>{n.options.map((o, i) => <li key={i}>{o}</li>)}</ul>}</div>))}</div>
+      {res.ph && <div className="nutrient"><b>Soil pH {res.ph.value}</b><p>{res.ph.finding}</p><p>{res.ph.option}</p><p className="muted small">{res.ph.caveat}</p></div>}
+      {res.notes.map((n, i) => <Notice key={i}>{n}</Notice>)}
+      <Notice tone="warn"><b>Safe use.</b> {res.safety} No application rates are given because they require crop, yield target and soil-test calibration that this tool does not have.</Notice>
+    </>
+  );
+}
+
+export default function Fertilizer() {
+  const [f, setF] = useState({ crop: "", n_level: "", p_level: "", k_level: "", ph: "" });
+  const [res, setRes] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const set = k => e => setF({ ...f, [k]: e.target.value });
+  async function submit(e) {
+    e.preventDefault(); setErr(""); setRes(null);
+    if (!f.crop.trim()) return setErr("Please enter the crop being cultivated.");
+    if (f.ph !== "" && (Number(f.ph) < 0 || Number(f.ph) > 14)) return setErr("Soil pH must be between 0 and 14.");
+    if (!f.n_level && !f.p_level && !f.k_level && f.ph === "") return setErr("Enter at least one soil measurement.");
+    setBusy(true);
+    try { setRes(await api("/fertilizer/recommend", { method: "POST", json: { crop: f.crop, n_level: f.n_level || null, p_level: f.p_level || null, k_level: f.k_level || null, ph: f.ph === "" ? null : Number(f.ph) } })); }
+    catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+  return (
+    <>
+      <PageHeader title="Fertilizer Recommendation" sub="Nutrient guidance from your soil-test results" />
+      <div className="grid-2 wide-left">
+        <Card title="Soil test results">
+          <form onSubmit={submit} noValidate>
+            <label>Crop being cultivated<input list="crops" value={f.crop} onChange={set("crop")} maxLength={60} placeholder="e.g. Rice" /><datalist id="crops">{CROPS.map(c => <option key={c} value={c} />)}</datalist></label>
+            <div className="form-grid three">{[["n_level", "Nitrogen (N) level"], ["p_level", "Phosphorus (P) level"], ["k_level", "Potassium (K) level"]].map(([k, l]) => (
+              <label key={k}>{l}<select value={f[k]} onChange={set(k)}>{LEVELS.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select></label>))}</div>
+            <label>Soil pH <small>(0-14, optional)</small><input type="number" step="0.1" value={f.ph} onChange={set("ph")} /></label>
+            {err && <Notice tone="error">{err}</Notice>}
+            <button className="btn btn-primary wide" disabled={busy}>{busy ? "Working..." : "Get guidance"}</button>
+          </form>
+        </Card>
+        <Card title="How this works">
+          <p className="long">Enter the <b>Low / Medium / High</b> categories from your soil-test report - labs use different methods and units, so this tool does not guess numeric thresholds. Anything left as "Not measured" is never assumed.</p>
+          <p className="long">The guidance is a transparent rule set (not machine learning). It does not give application rates. Always follow product labels and consult your local agricultural extension office.</p>
+        </Card>
+      </div>
+      {res && <Card title={`Guidance for ${res.crop}`}><FertResult res={res} /><p className="muted small">Saved to your <Link to="/history">history</Link>.</p></Card>}
+    </>
+  );
+}

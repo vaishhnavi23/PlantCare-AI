@@ -1,0 +1,22 @@
+.env
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+backend/data/*.db
+backend/data/uploads/
+backend/data/.secret_key
+backend/data/experts.json
+backend/models/*.joblib
+backend/models/evaluation.json
+frontend/node_modules/
+frontend/dist/
+# Python virtual environments
+.venv/
+venv/
+**/.venv/
+**/venv/
+
+# Node dependencies
+node_modules/
+**/node_modules/

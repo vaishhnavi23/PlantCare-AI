@@ -1,0 +1,85 @@
+"""Fertilizer / soil-nutrient guidance - a transparent RULE-BASED method (no ML, no dataset).
+
+The user supplies soil-test *categories* (low / medium / high) copied from a lab report, because numeric
+thresholds depend on the lab method, units, crop and region. Anything left as 'not measured' is never inferred.
+No application rates are produced: those need crop, yield target, soil test method and local calibration.
+"""
+from __future__ import annotations
+
+LEVELS = {"low", "medium", "high"}
+NUTRIENTS = {"N": "Nitrogen", "P": "Phosphorus", "K": "Potassium"}
+LEGUMES = {"soybean", "chickpea", "lentil", "pigeonpea", "mungbean", "mothbeans", "blackgram", "kidneybeans", "groundnut", "peas", "beans"}
+
+LOW_OPTIONS = {
+    "N": {"mineral": "Nitrogen fertilisers such as urea, ammonium sulfate or calcium ammonium nitrate.",
+          "organic": "Compost or well-rotted manure; legume rotation or green manure."},
+    "P": {"mineral": "Phosphorus fertilisers such as single or triple superphosphate, or DAP (which also supplies nitrogen).",
+          "organic": "Compost or well-rotted manure; bone meal where available."},
+    "K": {"mineral": "Potassium fertilisers such as muriate of potash (MOP) or sulfate of potash (preferred for chloride-sensitive crops).",
+          "organic": "Compost or well-rotted manure."},
+}
+SAFETY = ("This is general guidance, not a fertiliser prescription. Exact products and amounts depend on your crop, soil-test method, "
+          "target yield and local conditions. Always follow product labels and consult your local agricultural extension office or an agronomist.")
+
+
+class FertInputError(ValueError):
+    pass
+
+
+def recommend(crop: str, levels: dict, ph) -> dict:
+    crop = (crop or "").strip()
+    if not crop or len(crop) > 60:
+        raise FertInputError("Please enter the crop being cultivated (up to 60 characters).")
+    clean = {}
+    for k in NUTRIENTS:
+        v = levels.get(k)
+        v = None if v in (None, "", "unknown") else str(v).lower()
+        if v is not None and v not in LEVELS:
+            raise FertInputError(f"{NUTRIENTS[k]} level must be low, medium, high or not measured.")
+        clean[k] = v
+    ph_val = None
+    if ph not in (None, ""):
+        try:
+            ph_val = float(ph)
+        except (TypeError, ValueError):
+            raise FertInputError("Soil pH must be a number.")
+        if not 0 <= ph_val <= 14:
+            raise FertInputError("Soil pH must be between 0 and 14.")
+    if all(v is None for v in clean.values()) and ph_val is None:
+        raise FertInputError("Enter at least one soil measurement (N, P, K level or pH).")
+
+    nutrients = []
+    for k, name in NUTRIENTS.items():
+        lvl = clean[k]
+        if lvl is None:
+            nutrients.append({"nutrient": name, "level": "not measured", "finding": "Not measured - no conclusion is drawn about this nutrient.", "options": []})
+        elif lvl == "low":
+            o = LOW_OPTIONS[k]
+            nutrients.append({"nutrient": name, "level": "low", "finding": f"{name} is reported low, so a deficiency is possible.",
+                              "options": [o["mineral"], o["organic"]]})
+        elif lvl == "medium":
+            nutrients.append({"nutrient": name, "level": "medium", "finding": f"{name} is reported adequate; no extra {name.lower()} is indicated beyond normal crop-removal replacement.", "options": []})
+        else:
+            nutrients.append({"nutrient": name, "level": "high", "finding": f"{name} is reported high; avoid adding more - excess can cause nutrient imbalance and runoff.", "options": []})
+
+    ph_block = None
+    if ph_val is not None:
+        if ph_val < 5.5:
+            msg, opt = "Strongly acidic for most crops; nutrient availability and root growth can suffer.", "A liming material may help - the amount needs a lime-requirement test."
+        elif ph_val < 6.0:
+            msg, opt = "Slightly acidic; fine for some crops, low for many.", "Check your crop's preferred range; light liming may be considered on local advice."
+        elif ph_val <= 7.5:
+            msg, opt = "Within the range suited to most crops.", "No pH correction is generally needed."
+        elif ph_val <= 8.5:
+            msg, opt = "Alkaline; availability of iron, zinc and manganese can be reduced.", "Acidifying fertilisers (e.g. ammonium sulfate), organic matter or elemental sulfur may help on local advice."
+        else:
+            msg, opt = "Strongly alkaline; test for salinity or sodicity.", "Corrective options such as gypsum depend on those tests - seek local advice."
+        ph_block = {"value": ph_val, "finding": msg, "option": opt,
+                    "caveat": "Ranges are general; some crops (e.g. blueberry) prefer acidic soil."}
+
+    notes = []
+    if crop.lower().replace(" ", "") in LEGUMES:
+        notes.append(f"{crop.title()} is a legume and can fix part of its own nitrogen, so nitrogen needs are often lower - confirm locally.")
+    return {"crop": crop, "inputs": {"levels": clean, "ph": ph_val}, "nutrients": nutrients, "ph": ph_block, "notes": notes,
+            "method": "Transparent rule-based guidance from soil-test categories you entered. No machine-learning model and no dataset is used.",
+            "safety": SAFETY}

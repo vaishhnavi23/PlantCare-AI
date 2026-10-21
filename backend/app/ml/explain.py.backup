@@ -1,0 +1,62 @@
+"""Grad-CAM for the end-to-end ResNet50 classifier.
+
+Grad-CAM needs gradients through a CNN, so it can explain the fine-tuned ResNet50 only. It cannot
+explain the SVM / Random Forest members, and the heatmap says nothing about their decisions.
+"""
+from __future__ import annotations
+
+import logging
+
+import numpy as np
+from PIL import Image
+
+log = logging.getLogger("plantcare.explain")
+
+
+def _colorize(cam: np.ndarray) -> np.ndarray:
+    """Simple blue->green->yellow->red ramp for a [0,1] map (avoids a matplotlib dependency)."""
+    r = np.clip(1.5 - np.abs(4 * cam - 3), 0, 1)
+    g = np.clip(1.5 - np.abs(4 * cam - 2), 0, 1)
+    b = np.clip(1.5 - np.abs(4 * cam - 1), 0, 1)
+    return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
+
+
+def gradcam_overlay(member, image: Image.Image, class_index: int) -> Image.Image | None:
+    """Return the image with a Grad-CAM overlay for `class_index`, or None if it cannot be computed."""
+    try:
+        torch = member.torch
+        model = member.model
+        captured = []
+
+        def hook(_module, _inp, out):
+            if isinstance(out, torch.Tensor) and out.dim() == 4 and out.shape[-1] > 1 and out.shape[-2] > 1 and out.requires_grad:
+                out.retain_grad()
+                captured.append(out)
+
+        handles = [m.register_forward_hook(hook) for m in model.modules()]
+        try:
+            inputs = {k: v.to(member.device) for k, v in member.processor(images=image.convert("RGB"), return_tensors="pt").items()}
+            with torch.enable_grad():
+                logits = model(**inputs).logits
+                model.zero_grad()
+                logits[0, class_index].backward()
+        finally:
+            for h in handles:
+                h.remove()
+        if not captured or captured[-1].grad is None:
+            return None
+        act, grad = captured[-1].detach()[0], captured[-1].grad.detach()[0]
+        weights = grad.mean(dim=(1, 2))
+        cam = torch.relu((weights[:, None, None] * act).sum(0)).cpu().numpy()
+        if cam.max() <= 0:
+            return None
+        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+        cam_img = Image.fromarray((cam * 255).astype(np.uint8)).resize(image.size, Image.BILINEAR)
+        heat = _colorize(np.asarray(cam_img, dtype=np.float32) / 255.0)
+        base = np.asarray(image.convert("RGB"), dtype=np.float32)
+        alpha = (np.asarray(cam_img, dtype=np.float32) / 255.0)[..., None] * 0.55
+        out = base * (1 - alpha) + heat.astype(np.float32) * alpha
+        return Image.fromarray(out.astype(np.uint8))
+    except Exception:
+        log.exception("Grad-CAM failed")
+        return None
